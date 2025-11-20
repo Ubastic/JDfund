@@ -1,12 +1,9 @@
-# 可选，将显示在 GitHub 存储库的“操作”选项卡中的工作流名称
 name: Release CI
 
-# 指定此工作流的触发器
 on:
   push:
-    # 匹配特定标签 (refs/tags)
     tags:
-      - 'v*' # 推送事件匹配 v*, 例如 v1.0，v20.15.10 等来触发工作流
+      - 'v*' # 匹配 v 开头的标签触发发布
 
 jobs:
   publish-tauri:
@@ -16,54 +13,56 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest" # for Arm based macs (M1 and above).
-            args: "--target aarch64-apple-darwin"
-          - platform: "macos-latest" # for Intel based macs.
-            args: "--target x86_64-apple-darwin" 
-          - platform: "windows-latest"
-            args: ""
+          - platform: "macos-latest"  # M系列芯片Mac
+            target: "aarch64-apple-darwin"
+          - platform: "macos-latest"  # Intel芯片Mac
+            target: "x86_64-apple-darwin"
+          - platform: "windows-latest" # Windows
+            target: "x86_64-pc-windows-msvc"
+          # 可选：添加Linux支持
+          # - platform: "ubuntu-22.04"
+          #   target: "x86_64-unknown-linux-gnu"
 
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: setup node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: 'npm'
 
-      - name: install Rust stable
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
 
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04' # This must match the platform value defined above.
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-        # webkitgtk 4.0 is for Tauri v1 - webkitgtk 4.1 is for Tauri v2.
-        # You can remove the one that doesn't apply to your app to speed up the workflow a bit.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          # Tauri v2 需要 webkit2gtk-4.1
 
-      - name: install frontend dependencies
-        run: yarn install # change this to npm, pnpm or bun depending on which one you use.
+      - name: Install frontend dependencies
+        run: npm install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri v2 签名配置（可选）
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          # macOS 签名（可选）
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: app-v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version.
-          releaseName: "JDfund"
-          releaseBody: "直接下载安装就可."
+          tagName: ${{ github.ref_name }}  # 使用推送的标签名
+          releaseName: "JDfund"  # 发布名称包含版本号
+          releaseBody: "直接下载安装即可使用。"
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
-                # 安装依赖执行构建，以及推送 github release
-      - name: Install app dependencies and build it
-        run: yarn && yarn tauri build
-      - uses: tauri-apps/tauri-action@v0.3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ needs.create-release.outputs.RELEASE_UPLOAD_ID }}
+          args: --target ${{ matrix.target }}  # 传递目标架构参数
