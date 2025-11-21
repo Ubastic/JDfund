@@ -21,6 +21,11 @@
           "url": "https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816",
           "method": "post",
           "allow-fetch-read-body": true
+        },
+        {
+          "url": "https://api.jdjygold.com/gw2/generic/jrm/h5/m/icbcLatestPrice?productSku=2005453243",
+          "method": "post",
+          "allow-fetch-read-body": true
         }
       ]
     },
