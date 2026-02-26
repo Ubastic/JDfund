@@ -8,7 +8,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder,
 };
-use tauri_plugin_store::{Store, StoreExt};
+use tauri_plugin_store::StoreExt;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 struct Settings {
@@ -207,7 +207,6 @@ pub fn run() {
                 .inner_size(280.0, 40.0)
                 .min_inner_size(100.0, 30.0)
                 .max_inner_size(400.0, 60.0)
-                .transparent(true)
                 .always_on_top(true)
                 .decorations(false)
                 .skip_taskbar(true)
