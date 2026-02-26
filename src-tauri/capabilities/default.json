@@ -9,6 +9,7 @@
     "core:default", 
     "core:window:allow-start-dragging",
     "core:window:allow-close",
+    "core:window:allow-set-always-on-top",
     {
       "identifier": "http:default",
       "allow": [

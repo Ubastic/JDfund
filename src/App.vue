@@ -70,63 +70,83 @@ const CONSTANTS = {
 
 // HTTP 请求
 const fetchMinshengPrice = async () => {
+  console.log('开始获取民生价格...');
   try {
     const response = await fetch("https://api.jdjygold.com/gw/generic/hj/h5/m/latestPrice", {
       method: "GET",
       timeout: 30
     });
+    console.log('民生响应状态:', response.status, response.ok);
     const data = await response.json();
+    console.log('民生价格响应:', data);
     const newPrice = data.resultData?.datas?.price;
+    console.log('民生解析价格:', newPrice);
     if (newPrice && newPrice !== lastPrices.value.ms) {
       triggerPriceChange();
       lastPrices.value.ms = newPrice;
     }
     state.minshengPrice = newPrice || "--";
+    console.log('民生最终价格:', state.minshengPrice);
   } catch (error) {
+    console.error('民生价格获取失败:', error);
     state.minshengPrice = "--";
   }
 };
 
 const fetchZheshangPrice = async () => {
+  console.log('开始获取浙商价格...');
   try {
     const response = await fetch("https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816", {
       method: "POST",
       data: { reqData: { productSku: "1961543816" } },
       timeout: 30
     });
+    console.log('浙商响应状态:', response.status, response.ok);
     const data = await response.json();
+    console.log('浙商价格响应:', data);
     const newPrice = data.resultData?.datas?.price;
+    console.log('浙商解析价格:', newPrice);
     if (newPrice && newPrice !== lastPrices.value.zs) {
       triggerPriceChange();
       lastPrices.value.zs = newPrice;
     }
     state.zheshangPrice = newPrice || "--";
+    console.log('浙商最终价格:', state.zheshangPrice);
   } catch (error) {
+    console.error('浙商价格获取失败:', error);
     state.zheshangPrice = "--";
   }
 };
 
 const fetchIcbcPrice = async () => {
+  console.log('开始获取工行价格...');
   try {
     const response = await fetch("https://api.jdjygold.com/gw2/generic/jrm/h5/m/icbcLatestPrice?productSku=2005453243", {
       method: "POST",
       data: { reqData: { productSku: "2005453243" } },
       timeout: 30
     });
+    console.log('工行响应状态:', response.status, response.ok);
     const data = await response.json();
+    console.log('工行价格响应:', data);
     const newPrice = data.resultData?.datas?.price;
+    console.log('工行解析价格:', newPrice);
     if (newPrice && newPrice !== lastPrices.value.gh) {
       triggerPriceChange();
       lastPrices.value.gh = newPrice;
     }
     state.icbcPrice = newPrice || "--";
+    console.log('工行最终价格:', state.icbcPrice);
   } catch (error) {
+    console.error('工行价格获取失败:', error);
     state.icbcPrice = "--";
   }
 };
 
 const fetchAllHttpPrices = async () => {
+  console.log('开始获取所有HTTP价格...');
   await Promise.all([fetchMinshengPrice(), fetchZheshangPrice(), fetchIcbcPrice()]);
+  console.log('所有HTTP价格获取完成');
 };
 
 // WebSocket
@@ -200,10 +220,16 @@ const checkDockedStatus = async () => {
 const initWebsocket = async () => {
   try {
     ws = await WebSocket.connect(CONSTANTS.WS_URL);
-    ws.send(JSON.stringify({ "action": "2", "bizType": "2", "keys": ["WG-XAUUSD"] }));
-    ws.addListener((e) => {
+    console.log('WebSocket已连接');
+    const msg = JSON.stringify({ "action": "2", "bizType": "2", "keys": ["WG-XAUUSD"] });
+    console.log('发送WebSocket消息:', msg);
+    ws.send(msg);
+    console.log('已添加message监听器');
+    ws.addListener("message", (e) => {
+      console.log('收到WebSocket原始消息:', e);
       try {
         let data = JSON.parse(e.data);
+        console.log('XAU WebSocket数据:', data);
         if (data.data?.lastPrice) {
           const newPrice = data.data.lastPrice;
           if (newPrice !== lastPrices.value.xau) {
@@ -212,9 +238,13 @@ const initWebsocket = async () => {
           }
           state.xauPrice = newPrice;
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error('XAU数据解析失败:', err);
+      }
     });
-  } catch (err) {}
+  } catch (err) {
+    console.error('WebSocket连接失败:', err);
+  }
 };
 
 // 监听设置更新
@@ -228,11 +258,11 @@ onMounted(async () => {
   try {
     const backendSettings = await invoke('get_settings');
     settings.value = {
-      showXAU: backendSettings.show_xau,
-      showMS: backendSettings.show_ms,
-      showGH: backendSettings.show_gh,
-      showZS: backendSettings.show_zs,
-      bgColor: backendSettings.bg_color
+      showXAU: backendSettings.show_xau ?? true,
+      showMS: backendSettings.show_ms ?? true,
+      showGH: backendSettings.show_gh ?? true,
+      showZS: backendSettings.show_zs ?? true,
+      bgColor: backendSettings.bg_color ?? '#2c3e50'
     };
   } catch (e) {
     console.error('Failed to load settings:', e);
@@ -242,17 +272,19 @@ onMounted(async () => {
   unlisten = await listen('settings-updated', (event) => {
     const s = event.payload;
     settings.value = {
-      showXAU: s.show_xau,
-      showMS: s.show_ms,
-      showGH: s.show_gh,
-      showZS: s.show_zs,
-      bgColor: s.bg_color
+      showXAU: s.show_xau ?? true,
+      showMS: s.show_ms ?? true,
+      showGH: s.show_gh ?? true,
+      showZS: s.show_zs ?? true,
+      bgColor: s.bg_color ?? '#2c3e50'
     };
   });
   
   // 初始获取价格
+  console.log('开始初始化价格获取...');
   fetchAllHttpPrices();
   httpIntervalId = setInterval(fetchAllHttpPrices, CONSTANTS.HTTP_FETCH_INTERVAL);
+  console.log('开始初始化WebSocket...');
   initWebsocket();
   
   // 启动贴边检测（每500ms检查一次位置）

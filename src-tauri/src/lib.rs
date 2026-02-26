@@ -2,7 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -24,19 +29,47 @@ struct AppSettings(Mutex<Settings>);
 const SETTINGS_KEY: &str = "settings";
 const STORE_PATH: &str = "settings.bin";
 
+fn default_settings() -> Settings {
+    Settings {
+        show_xau: true,
+        show_ms: true,
+        show_gh: true,
+        show_zs: true,
+        bg_color: "#2c3e50".to_string(),
+    }
+}
+
+fn log_line(message: &str) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut path = std::env::temp_dir();
+    path.push("JDfund.log");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "[{}] {}", timestamp, message);
+    }
+}
+
 // 获取设置
 #[tauri::command]
 fn get_settings<R: Runtime>(app: AppHandle<R>, _state: State<AppSettings>) -> Settings {
-    let store = app.store(STORE_PATH).unwrap();
+    let store = match app.store(STORE_PATH) {
+        Ok(store) => store,
+        Err(err) => {
+            log_line(&format!("get_settings: open store failed: {err}"));
+            return default_settings();
+        }
+    };
     match store.get(SETTINGS_KEY) {
-        Some(value) => serde_json::from_value(value).unwrap_or_default(),
-        None => Settings {
-            show_xau: true,
-            show_ms: true,
-            show_gh: true,
-            show_zs: true,
-            bg_color: "#2c3e50".to_string(),
+        Some(value) => match serde_json::from_value(value) {
+            Ok(settings) => settings,
+            Err(err) => {
+                log_line(&format!("get_settings: decode failed: {err}"));
+                default_settings()
+            }
         },
+        None => default_settings(),
     }
 }
 
@@ -52,7 +85,13 @@ fn save_settings<R: Runtime>(
     store.set(SETTINGS_KEY, value);
     store.save().map_err(|e| e.to_string())?;
     
-    *state.0.lock().unwrap() = settings.clone();
+    match state.0.lock() {
+        Ok(mut guard) => *guard = settings.clone(),
+        Err(_) => {
+            log_line("save_settings: settings lock poisoned");
+            return Err("Settings lock poisoned".to_string());
+        }
+    }
     
     // 通知前端设置已更新
     let _ = app.emit("settings-updated", settings);
@@ -66,7 +105,13 @@ fn toggle_platform<R: Runtime>(
     state: State<AppSettings>,
     platform: String,
 ) -> Result<Settings, String> {
-    let mut current = state.0.lock().unwrap().clone();
+    let mut current = match state.0.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => {
+            log_line("toggle_platform: settings lock poisoned");
+            return Err("Settings lock poisoned".to_string());
+        }
+    };
     
     match platform.as_str() {
         "xau" => current.show_xau = !current.show_xau,
@@ -87,7 +132,13 @@ fn set_bg_color<R: Runtime>(
     state: State<AppSettings>,
     color: String,
 ) -> Result<Settings, String> {
-    let mut current = state.0.lock().unwrap().clone();
+    let mut current = match state.0.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => {
+            log_line("set_bg_color: settings lock poisoned");
+            return Err("Settings lock poisoned".to_string());
+        }
+    };
     current.bg_color = color;
     save_settings(app.clone(), state, current.clone())?;
     Ok(current)
@@ -120,17 +171,18 @@ fn position_window_bottom_right<R: Runtime>(app: &AppHandle<R>) {
         if let Ok(Some(monitor)) = window.primary_monitor() {
             let size = monitor.size();
             let position = monitor.position();
-                    // 计算窗口位置 (右下角留一些边距)
-                    let window_width = 280.0;
-                    let window_height = 40.0;
-                    let margin = 10.0;
-                    
-                    let x = position.x as f64 + size.width as f64 - window_width - margin;
-                    let y = position.y as f64 + size.height as f64 - window_height - margin;
-                    
-                    let _ = window.set_position(tauri::Position::Physical(
-                        tauri::PhysicalPosition::new(x as i32, y as i32),
-                    ));
+            
+            // 计算窗口位置 (右下角留一些边距)
+            let window_width = 280.0;
+            let window_height = 40.0;
+            let margin = 10.0;
+            
+            let x = position.x as f64 + size.width as f64 - window_width - margin;
+            let y = position.y as f64 + size.height as f64 - window_height - margin;
+            
+            let _ = window.set_position(tauri::Position::Physical(
+                tauri::PhysicalPosition::new(x as i32, y as i32),
+            ));
         }
     }
 }
@@ -171,12 +223,16 @@ fn create_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::Er
 }
 
 pub fn run() {
+    std::panic::set_hook(Box::new(|info| {
+        log_line(&format!("panic: {info}"));
+    }));
+    log_line("app start");
     tauri::Builder::default()
         .plugin(tauri_plugin_websocket::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .manage(AppSettings(Mutex::new(Settings::default())))
+        .manage(AppSettings(Mutex::new(default_settings())))
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
@@ -185,90 +241,109 @@ pub fn run() {
             quit_app
         ])
         .setup(|app| {
+            log_line("setup: begin");
             // 加载设置
-            let store = app.store(STORE_PATH)?;
-            let settings: Settings = match store.get(SETTINGS_KEY) {
-                Some(value) => serde_json::from_value(value).unwrap_or_default(),
-                None => Settings {
-                    show_xau: true,
-                    show_ms: true,
-                    show_gh: true,
-                    show_zs: true,
-                    bg_color: "#2c3e50".to_string(),
+            let settings: Settings = match app.store(STORE_PATH) {
+                Ok(store) => match store.get(SETTINGS_KEY) {
+                    Some(value) => serde_json::from_value(value).unwrap_or_else(|_| default_settings()),
+                    None => default_settings(),
                 },
+                Err(err) => {
+                    log_line(&format!("setup: open store failed: {err}"));
+                    default_settings()
+                }
             };
             
             // 保存到状态
-            app.state::<AppSettings>().0.lock().unwrap().clone_from(&settings);
+            match app.state::<AppSettings>().0.lock() {
+                Ok(mut guard) => guard.clone_from(&settings),
+                Err(_) => {
+                    log_line("setup: settings lock poisoned");
+                    return Err("settings lock poisoned".into());
+                }
+            }
             
-            // 创建主窗口
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("黄金价格")
-                .inner_size(280.0, 40.0)
-                .min_inner_size(100.0, 30.0)
-                .max_inner_size(400.0, 60.0)
-                .always_on_top(true)
-                .decorations(false)
-                .skip_taskbar(true)
-                .resizable(false)
-                .build()?;
+            // 如果配置未创建窗口，则补建一个，避免重复创建导致闪退
+            if app.get_webview_window("main").is_none() {
+                let _window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .title("黄金价格")
+                    .inner_size(280.0, 40.0)
+                    .min_inner_size(100.0, 30.0)
+                    .max_inner_size(400.0, 60.0)
+                    .always_on_top(true)
+                    .decorations(false)
+                    .skip_taskbar(true)
+                    .resizable(false)
+                    .build()?;
+            }
             
             // 设置窗口到右下角
             position_window_bottom_right(app.handle());
             
-            // 创建托盘
-            let tray_menu = create_tray_menu(app.handle())?;
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .menu(&tray_menu)
-                .tooltip("黄金价格监控")
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => toggle_window_visibility(app),
-                    "toggle_xau" => {
-                        let state = app.state::<AppSettings>();
-                        let _ = toggle_platform(app.clone(), state, "xau".to_string());
-                    }
-                    "toggle_ms" => {
-                        let state = app.state::<AppSettings>();
-                        let _ = toggle_platform(app.clone(), state, "ms".to_string());
-                    }
-                    "toggle_gh" => {
-                        let state = app.state::<AppSettings>();
-                        let _ = toggle_platform(app.clone(), state, "gh".to_string());
-                    }
-                    "toggle_zs" => {
-                        let state = app.state::<AppSettings>();
-                        let _ = toggle_platform(app.clone(), state, "zs".to_string());
-                    }
-                    "color_dark" => {
-                        let state = app.state::<AppSettings>();
-                        let _ = set_bg_color(app.clone(), state, "#2c3e50".to_string());
-                    }
-                    "color_blue" => {
-                        let state = app.state::<AppSettings>();
-                        let _ = set_bg_color(app.clone(), state, "#1e3a5f".to_string());
-                    }
-                    "color_black" => {
-                        let state = app.state::<AppSettings>();
-                        let _ = set_bg_color(app.clone(), state, "#000000".to_string());
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray: &tauri::tray::TrayIcon<tauri::Wry>, event: tauri::tray::TrayIconEvent| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        toggle_window_visibility(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+            // 创建托盘（失败不影响主程序启动）
+            if let Ok(tray_menu) = create_tray_menu(app.handle()) {
+                if let Some(icon) = app.default_window_icon() {
+                    let _ = TrayIconBuilder::new()
+                        .icon(icon.clone())
+                        .menu(&tray_menu)
+                        .tooltip("黄金价格监控")
+                        .on_menu_event(|app, event| match event.id.as_ref() {
+                            "show" => toggle_window_visibility(app),
+                            "toggle_xau" => {
+                                let state = app.state::<AppSettings>();
+                                let _ = toggle_platform(app.clone(), state, "xau".to_string());
+                            }
+                            "toggle_ms" => {
+                                let state = app.state::<AppSettings>();
+                                let _ = toggle_platform(app.clone(), state, "ms".to_string());
+                            }
+                            "toggle_gh" => {
+                                let state = app.state::<AppSettings>();
+                                let _ = toggle_platform(app.clone(), state, "gh".to_string());
+                            }
+                            "toggle_zs" => {
+                                let state = app.state::<AppSettings>();
+                                let _ = toggle_platform(app.clone(), state, "zs".to_string());
+                            }
+                            "color_dark" => {
+                                let state = app.state::<AppSettings>();
+                                let _ = set_bg_color(app.clone(), state, "#2c3e50".to_string());
+                            }
+                            "color_blue" => {
+                                let state = app.state::<AppSettings>();
+                                let _ = set_bg_color(app.clone(), state, "#1e3a5f".to_string());
+                            }
+                            "color_black" => {
+                                let state = app.state::<AppSettings>();
+                                let _ = set_bg_color(app.clone(), state, "#000000".to_string());
+                            }
+                            "quit" => app.exit(0),
+                            _ => {}
+                        })
+                        .on_tray_icon_event(|tray: &tauri::tray::TrayIcon<tauri::Wry>, event: tauri::tray::TrayIconEvent| {
+                            if let TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } = event
+                            {
+                                toggle_window_visibility(tray.app_handle());
+                            }
+                        })
+                        .build(app);
+                    log_line("setup: tray created");
+                } else {
+                    log_line("setup: tray icon missing");
+                }
+            } else {
+                log_line("setup: tray menu create failed");
+            }
             
+            log_line("setup: done");
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|err| {
+            log_line(&format!("run error: {err}"));
+        });
 }
