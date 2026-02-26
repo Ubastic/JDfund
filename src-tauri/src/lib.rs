@@ -8,7 +8,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder,
 };
-use tauri_plugin_store::StoreExt;
+use tauri_plugin_store::{Store, StoreExt};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 struct Settings {
@@ -118,8 +118,8 @@ fn position_window_bottom_right<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         // 获取主显示器信息
         if let Ok(Some(monitor)) = window.primary_monitor() {
-            if let Some(size) = monitor.size() {
-                if let Some(position) = monitor.position() {
+            let size = monitor.size();
+            let position = monitor.position();
                     // 计算窗口位置 (右下角留一些边距)
                     let window_width = 280.0;
                     let window_height = 40.0;
@@ -131,8 +131,6 @@ fn position_window_bottom_right<R: Runtime>(app: &AppHandle<R>) {
                     let _ = window.set_position(tauri::Position::Physical(
                         tauri::PhysicalPosition::new(x as i32, y as i32),
                     ));
-                }
-            }
         }
     }
 }
@@ -150,8 +148,6 @@ fn create_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::Er
     let dark_i = MenuItem::with_id(app, "color_dark", "深色", true, None::<&str>)?;
     let blue_i = MenuItem::with_id(app, "color_blue", "蓝色", true, None::<&str>)?;
     let black_i = MenuItem::with_id(app, "color_black", "黑色", true, None::<&str>)?;
-    let color_menu = Menu::with_items(app, &[&dark_i, &blue_i, &black_i])?;
-    let color_item = MenuItem::with_id(app, "color", "背景颜色", true, None::<&str>)?;
     
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -166,7 +162,9 @@ fn create_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::Er
             &gh_i,
             &zs_i,
             &sep2,
-            &color_item,
+            &dark_i,
+            &blue_i,
+            &black_i,
             &quit_i,
         ],
     )
@@ -177,7 +175,7 @@ pub fn run() {
         .plugin(tauri_plugin_websocket::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_store::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .manage(AppSettings(Mutex::new(Settings::default())))
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -258,7 +256,7 @@ pub fn run() {
                     "quit" => app.exit(0),
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, event| {
+                .on_tray_icon_event(|tray: &tauri::tray::TrayIcon<tauri::Wry>, event: tauri::tray::TrayIconEvent| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
