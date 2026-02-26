@@ -1,10 +1,17 @@
 <template>
-  <div class="price-float" :style="{ backgroundColor: settings.bgColor }" data-tauri-drag-region>
-    <div class="prices">
-      <span v-if="settings.showXAU" class="price-tag">{{ xauPrice }}</span>
-      <span v-if="settings.showMS" class="price-tag">{{ minshengPrice }}</span>
-      <span v-if="settings.showGH" class="price-tag">{{ icbcPrice }}</span>
-      <span v-if="settings.showZS" class="price-tag">{{ zheshangPrice }}</span>
+  <div 
+    class="price-float" 
+    :class="{ 'docked': isDocked, 'price-changed': priceJustChanged }" 
+    :style="{ backgroundColor: isDocked ? 'transparent' : settings.bgColor, opacity: computedOpacity }" 
+    data-tauri-drag-region
+    @mouseenter="handleMouseEnter"
+    @mouseleave="handleMouseLeave"
+  >
+    <div class="prices" :class="{ 'docked-content': isDocked }">
+      <span v-if="settings.showXAU" class="price-tag" :class="{ 'docked-price': isDocked }">{{ xauPrice }}</span>
+      <span v-if="settings.showMS" class="price-tag" :class="{ 'docked-price': isDocked }">{{ minshengPrice }}</span>
+      <span v-if="settings.showGH" class="price-tag" :class="{ 'docked-price': isDocked }">{{ icbcPrice }}</span>
+      <span v-if="settings.showZS" class="price-tag" :class="{ 'docked-price': isDocked }">{{ zheshangPrice }}</span>
     </div>
   </div>
 </template>
@@ -26,12 +33,31 @@ const settings = ref({
   bgColor: '#2c3e50'
 });
 
+// 智能淡显状态
+const isHovered = ref(false);
+const isDocked = ref(false);
+const priceJustChanged = ref(false);
+const normalOpacity = ref(0.35); // 平时透明度
+const hoverOpacity = ref(1.0);  // 悬停透明度
+const priceChangeTimer = ref(null);
+
+// 计算当前透明度
+const computedOpacity = ref(normalOpacity.value);
+
 // 价格状态
 const state = reactive({
   xauPrice: "--",
   minshengPrice: "--",
   icbcPrice: "--",
   zheshangPrice: "--"
+});
+
+// 记录上次价格用于检测变动
+const lastPrices = ref({
+  xau: null,
+  ms: null,
+  gh: null,
+  zs: null
 });
 
 const { xauPrice, minshengPrice, icbcPrice, zheshangPrice } = toRefs(state);
@@ -50,7 +76,12 @@ const fetchMinshengPrice = async () => {
       timeout: 30
     });
     const data = await response.json();
-    state.minshengPrice = data.resultData?.datas?.price || "--";
+    const newPrice = data.resultData?.datas?.price;
+    if (newPrice && newPrice !== lastPrices.value.ms) {
+      triggerPriceChange();
+      lastPrices.value.ms = newPrice;
+    }
+    state.minshengPrice = newPrice || "--";
   } catch (error) {
     state.minshengPrice = "--";
   }
@@ -64,7 +95,12 @@ const fetchZheshangPrice = async () => {
       timeout: 30
     });
     const data = await response.json();
-    state.zheshangPrice = data.resultData?.datas?.price || "--";
+    const newPrice = data.resultData?.datas?.price;
+    if (newPrice && newPrice !== lastPrices.value.zs) {
+      triggerPriceChange();
+      lastPrices.value.zs = newPrice;
+    }
+    state.zheshangPrice = newPrice || "--";
   } catch (error) {
     state.zheshangPrice = "--";
   }
@@ -78,7 +114,12 @@ const fetchIcbcPrice = async () => {
       timeout: 30
     });
     const data = await response.json();
-    state.icbcPrice = data.resultData?.datas?.price || "--";
+    const newPrice = data.resultData?.datas?.price;
+    if (newPrice && newPrice !== lastPrices.value.gh) {
+      triggerPriceChange();
+      lastPrices.value.gh = newPrice;
+    }
+    state.icbcPrice = newPrice || "--";
   } catch (error) {
     state.icbcPrice = "--";
   }
@@ -91,6 +132,70 @@ const fetchAllHttpPrices = async () => {
 // WebSocket
 let ws = null;
 let httpIntervalId = null;
+let dockCheckInterval = null;
+
+// 触发价格变动闪烁
+const triggerPriceChange = () => {
+  priceJustChanged.value = true;
+  computedOpacity.value = hoverOpacity.value;
+  if (priceChangeTimer.value) clearTimeout(priceChangeTimer.value);
+  priceChangeTimer.value = setTimeout(() => {
+    priceJustChanged.value = false;
+    if (!isHovered.value && !isDocked.value) {
+      computedOpacity.value = normalOpacity.value;
+    }
+  }, 2000);
+};
+
+// 鼠标进入 - 恢复透明度
+const handleMouseEnter = () => {
+  isHovered.value = true;
+  computedOpacity.value = hoverOpacity.value;
+};
+
+// 鼠标离开 - 恢复淡化
+const handleMouseLeave = () => {
+  isHovered.value = false;
+  if (!priceJustChanged.value && !isDocked.value) {
+    computedOpacity.value = normalOpacity.value;
+  }
+};
+
+// 检查是否贴边
+const checkDockedStatus = async () => {
+  try {
+    const win = getCurrentWindow();
+    const position = await win.outerPosition();
+    const size = await win.innerSize();
+    const monitor = await win.primaryMonitor();
+    
+    if (monitor && position && size) {
+      const screenWidth = monitor.size.width;
+      const screenHeight = monitor.size.height;
+      const dockThreshold = 20; // 贴边阈值像素
+      
+      // 检查是否贴近左/右边缘
+      const isLeftDocked = position.x <= dockThreshold;
+      const isRightDocked = (position.x + size.width) >= (screenWidth - dockThreshold);
+      const isTopDocked = position.y <= dockThreshold;
+      const isBottomDocked = (position.y + size.height) >= (screenHeight - dockThreshold);
+      
+      // 只有贴边且不在悬停状态时才收缩
+      const shouldDock = (isLeftDocked || isRightDocked || isTopDocked || isBottomDocked) && !isHovered.value;
+      
+      if (shouldDock !== isDocked.value) {
+        isDocked.value = shouldDock;
+        if (shouldDock && !priceJustChanged.value) {
+          computedOpacity.value = 0.2; // 贴边时更透明
+        } else if (!shouldDock && !isHovered.value && !priceJustChanged.value) {
+          computedOpacity.value = normalOpacity.value;
+        }
+      }
+    }
+  } catch (e) {
+    // 静默处理错误
+  }
+};
 
 const initWebsocket = async () => {
   try {
@@ -100,7 +205,12 @@ const initWebsocket = async () => {
       try {
         let data = JSON.parse(e.data);
         if (data.data?.lastPrice) {
-          state.xauPrice = data.data.lastPrice;
+          const newPrice = data.data.lastPrice;
+          if (newPrice !== lastPrices.value.xau) {
+            triggerPriceChange();
+            lastPrices.value.xau = newPrice;
+          }
+          state.xauPrice = newPrice;
         }
       } catch (err) {}
     });
@@ -144,11 +254,18 @@ onMounted(async () => {
   fetchAllHttpPrices();
   httpIntervalId = setInterval(fetchAllHttpPrices, CONSTANTS.HTTP_FETCH_INTERVAL);
   initWebsocket();
+  
+  // 启动贴边检测（每500ms检查一次位置）
+  dockCheckInterval = setInterval(checkDockedStatus, 500);
+  // 初始检查一次
+  setTimeout(checkDockedStatus, 1000);
 });
 
 onUnmounted(() => {
   if (httpIntervalId) clearInterval(httpIntervalId);
+  if (dockCheckInterval) clearInterval(dockCheckInterval);
   if (unlisten) unlisten();
+  if (priceChangeTimer.value) clearTimeout(priceChangeTimer.value);
 });
 </script>
 
@@ -189,5 +306,55 @@ body {
   font-weight: 600;
   font-family: 'Consolas', 'Monaco', monospace;
   white-space: nowrap;
+  transition: font-size 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+/* 贴边收缩模式 */
+.price-float.docked {
+  padding: 2px 4px;
+  box-shadow: none;
+}
+
+.price-float.docked .prices {
+  gap: 4px;
+}
+
+.price-float.docked .price-tag {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* 贴边内容更紧凑 */
+.docked-content {
+  flex-direction: column;
+  gap: 2px !important;
+}
+
+.docked-price {
+  font-size: 10px !important;
+  opacity: 0.8;
+}
+
+/* 价格变动闪烁动画 */
+.price-float.price-changed .price-tag {
+  animation: priceFlash 2s ease-out;
+}
+
+@keyframes priceFlash {
+  0% { 
+    color: #ff6b6b;
+    text-shadow: 0 0 8px rgba(255, 107, 107, 0.8);
+    transform: scale(1.05);
+  }
+  50% { 
+    color: #ffd700;
+    text-shadow: 0 0 4px rgba(255, 215, 0, 0.4);
+    transform: scale(1.02);
+  }
+  100% { 
+    color: #ffd700;
+    text-shadow: none;
+    transform: scale(1);
+  }
 }
 </style>
