@@ -18,8 +18,6 @@
 
 <script setup>
 import { reactive, toRefs, onMounted, onUnmounted, ref } from "vue";
-import { fetch } from "@tauri-apps/plugin-http";
-import WebSocket from '@tauri-apps/plugin-websocket';
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -69,15 +67,54 @@ const CONSTANTS = {
 };
 
 // HTTP 请求
+const fetchXAUPrice = async () => {
+  console.log('开始获取XAU价格...');
+  try {
+    // 尝试国际金价接口
+    const responseText = await invoke('fetch_with_no_ssl', {
+      url: "https://api.jdjygold.com/gw/generic/hj/h5/m/queryGjjjLatestPrice",
+      method: "GET",
+      body: null
+    });
+    console.log('XAU响应文本:', responseText);
+    const data = JSON.parse(responseText);
+    console.log('XAU价格响应:', data);
+    
+    // 尝试多种可能的数据结构
+    let newPrice = null;
+    if (data.resultData?.datas?.price) {
+      newPrice = data.resultData.datas.price;
+    } else if (data.resultData?.price) {
+      newPrice = data.resultData.price;
+    } else if (data.price) {
+      newPrice = data.price;
+    } else if (data.resultData?.lastPrice) {
+      newPrice = data.resultData.lastPrice;
+    }
+    
+    console.log('XAU解析价格:', newPrice);
+    if (newPrice && newPrice !== lastPrices.value.xau) {
+      triggerPriceChange();
+      lastPrices.value.xau = newPrice;
+    }
+    state.xauPrice = newPrice || "--";
+    console.log('XAU最终价格:', state.xauPrice);
+  } catch (error) {
+    console.error('XAU价格获取失败:', error);
+    state.xauPrice = "--";
+  }
+};
+
 const fetchMinshengPrice = async () => {
   console.log('开始获取民生价格...');
   try {
-    const response = await fetch("https://api.jdjygold.com/gw/generic/hj/h5/m/latestPrice", {
+    const responseText = await invoke('fetch_with_no_ssl', {
+      url: "https://api.jdjygold.com/gw/generic/hj/h5/m/latestPrice",
       method: "GET",
-      timeout: 30
+      body: null
     });
-    console.log('民生响应状态:', response.status, response.ok);
-    const data = await response.json();
+    console.log('民生响应文本:', responseText);
+    const data = JSON.parse(responseText);
     console.log('民生价格响应:', data);
     const newPrice = data.resultData?.datas?.price;
     console.log('民生解析价格:', newPrice);
@@ -96,13 +133,14 @@ const fetchMinshengPrice = async () => {
 const fetchZheshangPrice = async () => {
   console.log('开始获取浙商价格...');
   try {
-    const response = await fetch("https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816", {
+    const bodyData = JSON.stringify({ reqData: { productSku: "1961543816" } });
+    const responseText = await invoke('fetch_with_no_ssl', {
+      url: "https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816",
       method: "POST",
-      data: { reqData: { productSku: "1961543816" } },
-      timeout: 30
+      body: bodyData
     });
-    console.log('浙商响应状态:', response.status, response.ok);
-    const data = await response.json();
+    console.log('浙商响应文本:', responseText);
+    const data = JSON.parse(responseText);
     console.log('浙商价格响应:', data);
     const newPrice = data.resultData?.datas?.price;
     console.log('浙商解析价格:', newPrice);
@@ -121,13 +159,14 @@ const fetchZheshangPrice = async () => {
 const fetchIcbcPrice = async () => {
   console.log('开始获取工行价格...');
   try {
-    const response = await fetch("https://api.jdjygold.com/gw2/generic/jrm/h5/m/icbcLatestPrice?productSku=2005453243", {
+    const bodyData = JSON.stringify({ reqData: { productSku: "2005453243" } });
+    const responseText = await invoke('fetch_with_no_ssl', {
+      url: "https://api.jdjygold.com/gw2/generic/jrm/h5/m/icbcLatestPrice?productSku=2005453243",
       method: "POST",
-      data: { reqData: { productSku: "2005453243" } },
-      timeout: 30
+      body: bodyData
     });
-    console.log('工行响应状态:', response.status, response.ok);
-    const data = await response.json();
+    console.log('工行响应文本:', responseText);
+    const data = JSON.parse(responseText);
     console.log('工行价格响应:', data);
     const newPrice = data.resultData?.datas?.price;
     console.log('工行解析价格:', newPrice);
@@ -219,31 +258,11 @@ const checkDockedStatus = async () => {
 
 const initWebsocket = async () => {
   try {
-    ws = await WebSocket.connect(CONSTANTS.WS_URL);
-    console.log('WebSocket已连接');
-    const msg = JSON.stringify({ "action": "2", "bizType": "2", "keys": ["WG-XAUUSD"] });
-    console.log('发送WebSocket消息:', msg);
-    ws.send(msg);
-    console.log('已添加message监听器');
-    ws.addListener("message", (e) => {
-      console.log('收到WebSocket原始消息:', e);
-      try {
-        let data = JSON.parse(e.data);
-        console.log('XAU WebSocket数据:', data);
-        if (data.data?.lastPrice) {
-          const newPrice = data.data.lastPrice;
-          if (newPrice !== lastPrices.value.xau) {
-            triggerPriceChange();
-            lastPrices.value.xau = newPrice;
-          }
-          state.xauPrice = newPrice;
-        }
-      } catch (err) {
-        console.error('XAU数据解析失败:', err);
-      }
-    });
+    console.log('启动后端WebSocket客户端...');
+    await invoke('start_websocket');
+    console.log('后端WebSocket客户端已启动');
   } catch (err) {
-    console.error('WebSocket连接失败:', err);
+    console.error('启动WebSocket失败:', err);
   }
 };
 
@@ -278,6 +297,37 @@ onMounted(async () => {
       showZS: s.show_zs ?? true,
       bgColor: s.bg_color ?? '#2c3e50'
     };
+  });
+  
+  // 监听后端 WebSocket 推送的 XAU 价格
+  await listen('xau-price-update', (event) => {
+    console.log('收到后端WebSocket消息:', event.payload);
+    try {
+      const data = JSON.parse(event.payload);
+      console.log('XAU数据:', data);
+      
+      let price = null;
+      if (data.data?.lastPrice) {
+        price = data.data.lastPrice;
+      } else if (data.lastPrice) {
+        price = data.lastPrice;
+      } else if (data.price) {
+        price = data.price;
+      }
+      
+      if (price) {
+        if (price !== lastPrices.value.xau) {
+          triggerPriceChange();
+          lastPrices.value.xau = price;
+        }
+        state.xauPrice = price;
+        console.log('XAU价格已更新:', state.xauPrice);
+      } else {
+        console.warn('未找到价格字段，完整数据:', data);
+      }
+    } catch (err) {
+      console.error('XAU数据解析失败:', err);
+    }
   });
   
   // 初始获取价格

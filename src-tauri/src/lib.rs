@@ -14,6 +14,9 @@ use tauri::{
     AppHandle, Emitter, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_store::StoreExt;
+use reqwest;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use futures_util::{StreamExt, SinkExt};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 struct Settings {
@@ -150,6 +153,138 @@ fn quit_app<R: Runtime>(app: AppHandle<R>) {
     app.exit(0);
 }
 
+// 自定义 HTTP 请求（跳过 SSL 验证）
+#[tauri::command]
+async fn fetch_with_no_ssl(url: String, method: String, body: Option<String>) -> Result<String, String> {
+    log_line(&format!("fetch_with_no_ssl: {} {}", method, url));
+    
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+        .map_err(|e| {
+            log_line(&format!("fetch_with_no_ssl: client build error: {}", e));
+            e.to_string()
+        })?;
+    
+    let request = match method.to_uppercase().as_str() {
+        "GET" => client.get(&url),
+        "POST" => {
+            let mut req = client.post(&url);
+            if let Some(body_str) = body {
+                req = req.header("Content-Type", "application/json").body(body_str);
+            }
+            req
+        },
+        _ => return Err("Unsupported method".to_string()),
+    };
+    
+    let response = request.send().await.map_err(|e| {
+        log_line(&format!("fetch_with_no_ssl: request error: {}", e));
+        e.to_string()
+    })?;
+    
+    let status = response.status();
+    log_line(&format!("fetch_with_no_ssl: status {}", status));
+    
+    let text = response.text().await.map_err(|e| {
+        log_line(&format!("fetch_with_no_ssl: read body error: {}", e));
+        e.to_string()
+    })?;
+    
+    log_line(&format!("fetch_with_no_ssl: response body: {}", &text[..text.len().min(200)]));
+    
+    Ok(text)
+}
+
+// 启动 WebSocket 客户端（在 Rust 后端）
+#[tauri::command]
+async fn start_websocket<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    log_line("start_websocket: begin");
+    
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        loop {
+            log_line("start_websocket: connecting...");
+            
+            // 使用 native-tls 连接器，跳过证书验证
+            let connector = native_tls::TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .unwrap();
+            
+            let connector = tokio_tungstenite::Connector::NativeTls(connector);
+            
+            match connect_async_with_config(
+                "wss://cfws.jdjygold.com/data",
+                None,
+                false,
+                Some(connector),
+            ).await {
+                Ok((mut ws_stream, _)) => {
+                    log_line("start_websocket: connected");
+                    
+                    // 发送订阅消息
+                    let subscribe_msg = r#"{"action":"2","bizType":"2","keys":["WG-XAUUSD"]}"#;
+                    if let Err(e) = ws_stream.send(Message::Text(subscribe_msg.to_string())).await {
+                        log_line(&format!("start_websocket: send error: {}", e));
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    log_line("start_websocket: subscribed");
+                    
+                    // 接收消息
+                    while let Some(msg) = ws_stream.next().await {
+                        match msg {
+                            Ok(Message::Text(text)) => {
+                                log_line(&format!("start_websocket: received: {}", &text[..text.len().min(100)]));
+                                let _ = app_clone.emit("xau-price-update", text);
+                            }
+                            Ok(Message::Close(_)) => {
+                                log_line("start_websocket: connection closed");
+                                break;
+                            }
+                            Err(e) => {
+                                log_line(&format!("start_websocket: error: {}", e));
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => {
+                    log_line(&format!("start_websocket: connect error: {}", e));
+                }
+            }
+            
+            log_line("start_websocket: reconnecting in 5s...");
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        }
+    });
+    
+    Ok(())
+}
+
+async fn connect_async_with_config(
+    url: &str,
+    _config: Option<()>,
+    _disable_nagle: bool,
+    connector: Option<tokio_tungstenite::Connector>,
+) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::handshake::client::Response), tokio_tungstenite::tungstenite::Error> {
+    let url = url::Url::parse(url).unwrap();
+    let request = tokio_tungstenite::tungstenite::handshake::client::Request::builder()
+        .uri(url.as_str())
+        .header("Host", url.host_str().unwrap())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
+        .body(())
+        .unwrap();
+    
+    tokio_tungstenite::connect_async_tls_with_config(request, None, false, connector).await
+}
+
 // 显示/隐藏窗口
 fn toggle_window_visibility<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
@@ -238,7 +373,9 @@ pub fn run() {
             save_settings,
             toggle_platform,
             set_bg_color,
-            quit_app
+            quit_app,
+            fetch_with_no_ssl,
+            start_websocket
         ])
         .setup(|app| {
             log_line("setup: begin");
