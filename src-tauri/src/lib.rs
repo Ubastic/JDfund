@@ -299,24 +299,23 @@ fn toggle_window_visibility<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-// 设置窗口到右下角
-fn position_window_bottom_right<R: Runtime>(app: &AppHandle<R>) {
+// 设置窗口到屏幕中心
+fn position_window_center<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
-        // 获取主显示器信息
         if let Ok(Some(monitor)) = window.primary_monitor() {
-            let size = monitor.size();
-            let position = monitor.position();
-            
-            // 计算窗口位置 (右下角留一些边距)
-            let window_width = 280.0;
-            let window_height = 40.0;
-            let margin = 10.0;
-            
-            let x = position.x as f64 + size.width as f64 - window_width - margin;
-            let y = position.y as f64 + size.height as f64 - window_height - margin;
-            
+            let monitor_size = monitor.size();
+            let monitor_position = monitor.position();
+            let window_size = window
+                .inner_size()
+                .unwrap_or(tauri::PhysicalSize::new(280, 40));
+
+            let x = monitor_position.x as i32
+                + ((monitor_size.width as i32 - window_size.width as i32) / 2);
+            let y = monitor_position.y as i32
+                + ((monitor_size.height as i32 - window_size.height as i32) / 2);
+
             let _ = window.set_position(tauri::Position::Physical(
-                tauri::PhysicalPosition::new(x as i32, y as i32),
+                tauri::PhysicalPosition::new(x, y),
             ));
         }
     }
@@ -406,16 +405,16 @@ pub fn run() {
                     .title("黄金价格")
                     .inner_size(280.0, 40.0)
                     .min_inner_size(100.0, 30.0)
-                    .max_inner_size(400.0, 60.0)
                     .always_on_top(true)
                     .decorations(false)
                     .skip_taskbar(true)
-                    .resizable(false)
+                    .resizable(true)
+                    .visible(false)
                     .build()?;
             }
             
-            // 设置窗口到右下角
-            position_window_bottom_right(app.handle());
+            // 设置窗口到屏幕中心
+            position_window_center(app.handle());
             
             // 创建托盘（失败不影响主程序启动）
             if let Ok(tray_menu) = create_tray_menu(app.handle()) {

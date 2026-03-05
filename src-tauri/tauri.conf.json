@@ -13,21 +13,18 @@
     "windows": [
       {
         "fullscreen": false,
-        "resizable": false,
+        "resizable": true,
+        "visible": false,
         "width": 280,
         "height": 40,
-        "minWidth": 100,
+        "minWidth": 30,
         "minHeight": 30,
-        "maxWidth": 400,
-        "maxHeight": 60,
         "transparent": true,
         "alwaysOnTop": true,
         "hiddenTitle": true,
         "decorations": false,
         "skipTaskbar": true,
-        "center": false,
-        "x": -1,
-        "y": -1
+        "center": true
       }
     ],
     "security": {

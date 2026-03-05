@@ -206,6 +206,10 @@ const triggerPriceChange = () => {
   }, 2000);
 };
 
+const handleContextMenu = (event) => {
+  event.preventDefault();
+};
+
 // 鼠标进入 - 恢复透明度
 const handleMouseEnter = () => {
   isHovered.value = true;
@@ -271,7 +275,18 @@ let unlisten = null;
 
 onMounted(async () => {
   const win = getCurrentWindow();
-  await win.setAlwaysOnTop(true);
+  window.addEventListener('contextmenu', handleContextMenu);
+  try {
+    await win.setAlwaysOnTop(true);
+  } catch (err) {
+    console.error('setAlwaysOnTop failed:', err);
+  }
+  try {
+    await win.show();
+    await win.setFocus();
+  } catch (err) {
+    console.error('show window failed:', err);
+  }
   
   // 从后端加载设置
   try {
@@ -348,6 +363,7 @@ onUnmounted(() => {
   if (dockCheckInterval) clearInterval(dockCheckInterval);
   if (unlisten) unlisten();
   if (priceChangeTimer.value) clearTimeout(priceChangeTimer.value);
+  window.removeEventListener('contextmenu', handleContextMenu);
 });
 </script>
 
