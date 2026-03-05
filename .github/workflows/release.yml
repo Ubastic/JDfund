@@ -61,7 +61,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}  # 使用推送的标签名
-          releaseName: "JDfund"  # 发布名称包含版本号
+          releaseName: "GoldPrice"  # 发布名称包含版本号
           releaseBody: "直接下载安装即可使用。"
           releaseDraft: false
           prerelease: false

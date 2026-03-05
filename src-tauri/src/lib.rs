@@ -48,7 +48,7 @@ fn log_line(message: &str) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let mut path = std::env::temp_dir();
-    path.push("JDfund.log");
+    path.push("GoldPrice.log");
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(file, "[{}] {}", timestamp, message);
     }
@@ -402,7 +402,7 @@ pub fn run() {
             // 如果配置未创建窗口，则补建一个，避免重复创建导致闪退
             if app.get_webview_window("main").is_none() {
                 let _window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                    .title("黄金价格")
+                    .title("GoldPrice")
                     .inner_size(280.0, 40.0)
                     .min_inner_size(100.0, 30.0)
                     .always_on_top(true)
