@@ -15,7 +15,7 @@ use tauri::{
 };
 use tauri_plugin_store::StoreExt;
 use reqwest;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 use futures_util::{StreamExt, SinkExt};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
